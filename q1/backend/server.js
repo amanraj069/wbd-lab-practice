@@ -2,47 +2,96 @@ const express = require("express");
 const cors = require("cors");
 const fs = require("fs");
 const jwt = require("jsonwebtoken");
+const bcrypt = require("bcrypt");
 
 const app = express();
+const DATA_PATH = "./data/users.json";
+const JWT_SECRET = "secret";
 
 app.use(cors());
 app.use(express.json());
 
+const readUsers = () => {
+  if (!fs.existsSync(DATA_PATH)) {
+    fs.writeFileSync(DATA_PATH, JSON.stringify([]));
+  }
+  const raw = fs.readFileSync(DATA_PATH, "utf-8");
+  return JSON.parse(raw || "[]");
+};
+
+const writeUsers = (users) => {
+  fs.writeFileSync(DATA_PATH, JSON.stringify(users, null, 2));
+};
+
 app.get("/", (req, res) => {
-    res.send("Server running");
+  res.send("Server running");
 });
 
-app.post("/register", (req, res) => {
-    const users = JSON.parse(fs.readFileSync("./data/users.json"));
+app.post("/register", async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+    if (!name || !email || !password) {
+      return res
+        .status(400)
+        .json({ message: "Name, email, and password are required" });
+    }
 
+    const users = readUsers();
+    const existingUser = users.find((u) => u.email === email);
+
+    if (existingUser) {
+      return res.status(400).json({ message: "User already exists" });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
     const newUser = {
-        id: Date.now(),
-        name: req.body.name,
-        email: req.body.email,
-        password: req.body.password
+      id: Date.now(),
+      name,
+      email,
+      password: hashedPassword,
     };
 
     users.push(newUser);
+    writeUsers(users);
 
-    fs.writeFileSync("./data/users.json", JSON.stringify(users));
-
-    res.send("User registered");
+    res.json({ message: "User registered successfully" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Registration failed" });
+  }
 });
 
-app.post("/login", (req, res) => {
-    const users = JSON.parse(fs.readFileSync("./data/users.json"));
-
-    const user = users.find(u => u.email === req.body.email);
-
-    if(!user) return res.status(400).send("user not found");
-
-    if(user.password !== req.body.password){
-        return res.status(400).send("Invalid password");
+app.post("/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res
+        .status(400)
+        .json({ message: "Email and password are required" });
     }
 
-    const token = jwt.sign({id: user.id}, "secret");
+    const users = readUsers();
+    const user = users.find((u) => u.email === email);
 
-    res.json({token});
+    if (!user) {
+      return res.status(400).json({ message: "User not found" });
+    }
+
+    const passwordMatch = await bcrypt.compare(password, user.password);
+    if (!passwordMatch) {
+      return res.status(400).json({ message: "Invalid password" });
+    }
+
+    const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: "1h" });
+
+    res.json({
+      token,
+      user: { id: user.id, name: user.name, email: user.email },
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Login failed" });
+  }
 });
 
 app.listen(5000, () => console.log("Server running on port 5000"));
